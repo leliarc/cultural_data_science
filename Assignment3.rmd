@@ -1,0 +1,179 @@
+---
+title: "Assignment 3 - Our own data analysis"
+author: "Akaran Sivakumar (AS), Lelia Rønnow (LR), Shiraz Ben-Shoshan (SBS)"
+date: "01-12-2024"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading packages and data 
+```{r}
+library(tidyverse)
+#install.packages("countrycode")
+library(countrycode)
+```
+
+
+```{r}
+# Setting working directory
+#setwd("~/Desktop/AarhusUni/Semester5/IntroCultDataSci")
+
+# Loading Data
+WHO_MHExp_and_Deaths <- read_csv("archive/WHO_MHExp_and_Deaths.csv")
+```
+# Preliminary data visualisations (AS)
+```{r}
+WHO_MHExp_and_Deaths %>%
+ggplot(aes(x = HExp_Pctage_Y,
+y = Suicide_p100)) +
+geom_bar(stat = "summary", fun = "mean") +
+theme_minimal() +
+labs(x = "Health Expenditure", y = "Suicide rate") +
+ggtitle("Suicide rate and Health expenditure")
+```
+The plot above does not show any clear patterns, so we will now conduct further exploratory plots to discover hidden patterns.
+
+```{r}
+WHO_MHExp_and_Deaths %>%
+ggplot(aes(x = MHExp_Pctage_2011,
+y = Dep_Num_2015)) +
+geom_point()+
+theme_minimal() +
+labs(x = "Mental Health expenditure index in 2011", y = "Depression estimate index in 2015") +
+ggtitle("Mental heatlh index and Depression estimate index")
+```
+## Data mutation and further visualisations (LR)
+```{r}
+# Load the package
+library(reshape2)
+
+# Converting nominal deaths to a ratio of per 100k
+WHO_MHExp_and_Deaths$Deaths_per_100k <- (WHO_MHExp_and_Deaths$Deaths_All_Types / WHO_MHExp_and_Deaths$Population) * 100000
+
+# Convert country names to continent names
+WHO_MHExp_and_Deaths$continents <- countrycode(WHO_MHExp_and_Deaths$Country_Name, origin = "country.name", destination = "continent")
+
+# Remove the first and last columns
+df_filtered <- WHO_MHExp_and_Deaths[, -c(1, ncol(WHO_MHExp_and_Deaths)-1)]
+
+numeric_df <- df_filtered[, sapply(df_filtered, is.numeric)]
+# Calculate the correlation matrix and convert it to a long format
+cor_matrix <- cor(numeric_df, use = "complete.obs")
+cor_long <- melt(cor_matrix)
+
+# Correlation matrix plot
+ggplot(cor_long, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1, 1)) +
+  theme_minimal() +
+  labs(title = "Correlation Matrix", x = "", y = "") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+```
+Given the results in the correlation matrix, we see a semi-strong correlation between the mental health expenditure index and the health expenditure percentage. We have, therefore, decided not to include mental health expenditure index in any models, to avoid multicolinearity. 
+
+# Modelling (AS)
+```{r}
+# Creating the first and most simple model
+simple_model <- lm(Suicide_p100 ~ HExp_Pctage_Y, WHO_MHExp_and_Deaths)
+
+summary(simple_model)
+```
+Health expenditure percentage seems to have an effect on the suicide rate, but there is still a lot of unexplained variance.
+
+
+
+## Adding Random Effects (SBS)
+```{r}
+#install.packages("lmerTest")
+#install.packages("MuMIn")
+library(MuMIn)
+library(lmerTest)
+
+# Adding country as a random intercept
+mixed_model <- lmer(Suicide_p100 ~ HExp_Pctage_Y+(1|Country_Name), WHO_MHExp_and_Deaths)
+summary(mixed_model)
+
+# Calculating the marginal and conditional R-sqaured
+r_squared <- r.squaredGLMM(mixed_model)
+print(r_squared)
+
+
+```
+Adding a random intercept for country has made the effect of health expenditure percentage more clear/significant, thus explaining 88% of the data.
+
+
+```{r}
+# Adding continent as a column
+data <- WHO_MHExp_and_Deaths %>%
+  count(continents)
+
+# Counting the occurrences of each continent and calculating the percentage
+data <- WHO_MHExp_and_Deaths %>%
+  count(continents) %>%
+  mutate(percentage = n / sum(n) * 100)
+
+# Creating a bar plot to visualise the imbalance in the data
+ggplot(data, aes(x = continents, y = percentage, fill = continents)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  labs(title = "Distribution of Continents in the Dataset", 
+       x = "Continent", 
+       y = "Percentage (%)") +
+  scale_fill_brewer(palette = "Set3") +
+  geom_text(aes(label = paste0(round(percentage, 1), "%")), 
+            vjust = -0.5) +
+  theme_minimal()
+
+```
+The bar plot shows that Europe is very prominent in the data, compared to the other countries, thus telling us that we should take the results with a grain of salt. 
+
+```{r}
+# recalculating the "Year" column to use in models
+WHO_MHExp_and_Deaths$Year_since_start <- WHO_MHExp_and_Deaths$Year-2000
+
+# Creating a plot with the Year as a predictor
+ggplot(WHO_MHExp_and_Deaths, aes(x = Year_since_start, y = HExp_Pctage_Y)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) + 
+  labs(
+    title = "Health Expenditure Percentage vs. Years Since Start",
+    x = "Years Since Start",
+    y = "Health Expenditure (% of GDP)"
+  ) +
+  theme_minimal() 
+```
+Visual inspection shows a slightly positive slope between the year and the health expenditure percentage.
+
+## Adding more Predictors (LR)
+
+```{r}
+# Adding continent as an interaction term
+continent_simple_model <- lm(Suicide_p100 ~ HExp_Pctage_Y+HExp_Pctage_Y:continents ,WHO_MHExp_and_Deaths)
+summary(continent_simple_model)
+
+# Calculating the marginal and conditional R-sqaured
+r_squared <- r.squaredGLMM(continent_simple_model)
+print(r_squared)
+
+# Adding continent as both an interaction term and as a fixed predictor
+continent_model <- lm(Suicide_p100 ~ HExp_Pctage_Y*continents ,WHO_MHExp_and_Deaths)
+summary(continent_model)
+
+# Calculating the marginal and conditional R-sqaured
+r_squared <- r.squaredGLMM(continent_model)
+print(r_squared)
+```
+The explainability of both models do not seem as strong as the models with countries as random intercepts.
+
+# Model Selection (SBS)
+```{r}
+#using AIC to select the best and simplest model
+AIC(simple_model, continent_model,continent_simple_model, mixed_model)
+```
+We choose the "mixed_model" as it has best explainability while having the lowest AIC score. 
